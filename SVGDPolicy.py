@@ -55,12 +55,12 @@ class SVGDPolicy(nn.Module, BaseNet):
 
 	def forward(self, state, k):
 		state = self.tensor(state)
-		sample_shape = torch.Size([1, k, self.action_dim])
+		sample_shape = (1, k, self.action_dim)
 
 		expanded_inputs = []
 		state_expanded = state.unsqueeze(1)	# N*1*state_dim
 		expanded_inputs.append(state_expanded)
-		epsilon = torch.randn(sample_shape)	# 1*k*action_dim
+		epsilon = np.random.randn(*sample_shape) # 1*k*action_dim
 		epsilon = self.tensor(epsilon)
 		expanded_inputs.append(epsilon)
 
