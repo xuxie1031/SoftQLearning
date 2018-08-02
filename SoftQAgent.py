@@ -69,6 +69,7 @@ class SoftQAgent:
 
     def agent_training(self, experiences):
         self.train_qf(experiences, 1.0)
+        self.train_policy(experiences[0])
 
 
     def train_qf(self, experiences, action_max):
@@ -129,10 +130,17 @@ class SoftQAgent:
         states_expanded = states.unsqueeze(1)   # N*1*state_dim
         q_unbounded = self.qf(states_expanded, actions_fixed)   # N*K_fix*1
 
-        grad_q_action_fixed = torch.autograd.grad(q_unbounded, actions_fixed, grad_outputs=torch.ones(q_unbounded.size()))[0]
-        grad_q_action_fixed = grad_q_action_fixed.unsqueeze(2).detach()
+        grad_q_action_fixed = torch.autograd.grad(q_unbounded, actions_fixed, grad_outputs=torch.ones(q_unbounded.size()))[0]   # N*K_fix*action_dim
+        grad_q_action_fixed = grad_q_action_fixed.unsqueeze(2).detach()     # N*K_fix*1*action_dim
 
         # kernel calculation
         kernel = AdaptiveIsotropicGaussianKernel(actions_fixed, actions_updated)
-        kappa = kernel.kappa
-        kappa
+        kappa = kernel.kappa    # N*K_fix*K_update
+        kappa = kappa.unsqueeze     # N*K_fix*K_update*1
+        kappa_grads = kernel.grad   # N*K_fix*K_update*action_dim
+
+        action_grads = torch.mean(kappa*grad_q_action_fixed+self.alpha*kappa_grads, dim=1)  # N*K_update*action_dim
+
+        self.policy_optimizer.zero_grad()
+        -actions_updated.backward(gradient=action_grads)
+        self.policy_optimizer.step()
