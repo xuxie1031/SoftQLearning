@@ -47,7 +47,7 @@ class SoftQAgent:
             state = self.env.reset()
             while True:
                 action = self.policy.get_action(np.stack([state]))
-                next_state, reward, terminal = self.env.step(action)
+                next_state, reward, terminal, _ = self.env.step(action)
                 replay.feed([state, action, reward, next_state, int(terminal)])
 
                 self.total_steps += 1
@@ -64,6 +64,7 @@ class SoftQAgent:
                 if terminal:
                     self.episode_rewards.append(rewards)
                     # print training info ...
+                    print('epsisode %d total step %d avg reward %f' % (episode, self.total_steps, np.mean(np.array(self.episode_rewards[-100:]))))
                     break
 
 
