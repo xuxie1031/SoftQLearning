@@ -75,7 +75,7 @@ class SVGDPolicy(nn.Module, BaseNet):
 	
 	def sample_action(self, state):
 		action = self.forward(state, k=1)	# 1*action_dim
-		action = action[0]	# only pick up one action from batch
+		action = action[0][0]	# only pick up one action from batch
 
 		return action.cpu().detach().numpy()
 

@@ -28,7 +28,7 @@ class SoftQAgent:
         self.kernel_K_updated = int(self.kernel_K*self.kernel_update_ratio)
         self.kernel_K_fixed = self.kernel_K-self.kernel_K_updated
 
-        self.qf_target_k = config.qf_target_k
+        self.qf_target_K = config.qf_target_K
         self.qf_target.load_state_dict(self.qf.state_dict())
 
         self.qf_optimizer = config.qf_optimizer(self.qf.parameters(), lr=config.qf_learning_rate)
@@ -46,7 +46,7 @@ class SoftQAgent:
             rewards = 0
             state = self.env.reset()
             while True:
-                action = self.policy.get_action(np.stack([state]))
+                action = self.policy.sample_action(np.stack([state]))
                 next_state, reward, terminal, _ = self.env.step(action)
                 replay.feed([state, action, reward, next_state, int(terminal)])
 
@@ -59,7 +59,7 @@ class SoftQAgent:
                     self.agent_training(experiences)
 
                 if self.total_steps % self.soft_target_tau == 0:
-                    self.qf_target.lod_state_dict(self.qf.state_dict())
+                    self.qf_target.load_state_dict(self.qf.state_dict())
 
                 if terminal:
                     self.episode_rewards.append(rewards)
@@ -83,23 +83,23 @@ class SoftQAgent:
 
         states, actions, rewards, next_states, terminals = experiences
 
-        states = torch.tensor(states)   # N*state_dim
-        actions = torch.tensor(actions) # N*action_dim
-        rewards = torch.tensor(rewards)
-        next_states = torch.tensor(next_states)
-        terminals = torch.tensor(terminals)
+        states = self.qf.tensor(states)     # N*state_dim
+        actions = self.qf.tensor(actions)   # N*action_dim
+        rewards = self.qf.tensor(rewards)
+        next_states = self.qf.tensor(next_states)
+        terminals = self.qf.tensor(terminals)
 
         clipped_actions = torch.clamp(actions, -action_max, action_max)
         q_curr = self.qf(states, clipped_actions)   # N*1
         q_curr = q_curr.squeeze()   # N
 
         next_states_expanded = next_states.unsqueeze(1)  # N*1*state_dim
-        target_actions = torch.tensor(np.random.uniform(-1.0, 1.0, size=(1, self.qf_target_k, self.action_dim)))    # 1*self.qf_target_K*action_dim
+        target_actions = np.random.uniform(-1.0, 1.0, size=(1, self.qf_target_K, self.action_dim))  # 1*self.qf_target_K*action_dim
         q_next = self.qf_target(next_states_expanded, target_actions)   # N*self.qf_target_K*1
 
         v_next = log_sum_exp(q_next, 1).squeeze()   # N
-        v_next = v_next-torch.log(torch.tensor([self.qf_target_k]))
-        v_next = v_next+self.action_dim*torch.log(torch.tensor([2]))    # purpose?
+        v_next = v_next-torch.log(self.qf.tensor([self.qf_target_K]))
+        # v_next = v_next+self.action_dim*torch.log(self.qf.tensor([2.0]))    # purpose?
 
         ys = rewards+(1.0-terminals)*self.discount*v_next   # N
         ys = ys.detach()
@@ -113,35 +113,38 @@ class SoftQAgent:
 
     
     def train_policy(self, states):
-        states = torch.tensor(states)   # N*state_dim
+        states = self.policy.tensor(states)   # N*state_dim
         actions_fixed = self.policy(states, self.kernel_K_fixed)    # N*K_fix*action_dim
-        actions_fixed = torch.tensor(actions_fixed, requires_grad=True)
         actions_updated = self.policy(states, self.kernel_K_updated)    # N*K_update*action_dim
         
-        def invert_grad(x):
+        def invert_grad(actions, x):
             invert_max_v = 10.0
-            new_grad = x.clone()
-            greater_idx = actions_fixed > 1.0
-            lower_idx = actions_fixed < -1.0
-            new_grad[greater_idx] = -invert_max_v
-            new_grad[lower_idx] = invert_max_v
-            return new_grad
-        actions_fixed.register_hook(invert_grad)
+            greater_idx = actions > 1.0
+            lower_idx = actions < -1.0
+            x[greater_idx] = -invert_max_v
+            x[lower_idx] = invert_max_v
+            return x
+        actions_hooked = actions_fixed.detach()
+        actions_fixed.register_hook(lambda x: invert_grad(actions_hooked, x))
 
         states_expanded = states.unsqueeze(1)   # N*1*state_dim
         q_unbounded = self.qf(states_expanded, actions_fixed)   # N*K_fix*1
 
-        grad_q_action_fixed = torch.autograd.grad(q_unbounded, actions_fixed, grad_outputs=torch.ones(q_unbounded.size()))[0]   # N*K_fix*action_dim
-        grad_q_action_fixed = grad_q_action_fixed.unsqueeze(2).detach()     # N*K_fix*1*action_dim
+        grad_q_action_fixed = torch.autograd.grad(q_unbounded, actions_fixed, grad_outputs=torch.ones(q_unbounded.size(), device=self.policy.device))[0]   # N*K_fix*action_dim
+        # grad_q_action_fixed = grad_q_action_fixed.unsqueeze(2).detach()     # N*K_fix*1*action_dim
 
-        # kernel calculation
-        kernel = AdaptiveIsotropicGaussianKernel(actions_fixed, actions_updated)
-        kappa = kernel.kappa    # N*K_fix*K_update
-        kappa = kappa.unsqueeze     # N*K_fix*K_update*1
-        kappa_grads = kernel.grad   # N*K_fix*K_update*action_dim
+        # # kernel calculation
+        # kernel = AdaptiveIsotropicGaussianKernel(actions_fixed, actions_updated, self.policy.tensor([1e-5]))
+        # kappa = kernel.kappa    # N*K_fix*K_update
+        # kappa = kappa.unsqueeze(3)     # N*K_fix*K_update*1
+        # kappa_grads = kernel.kappa_grad   # N*K_fix*K_update*action_dim
 
-        action_grads = torch.mean(kappa*grad_q_action_fixed+self.alpha*kappa_grads, dim=1)  # N*K_update*action_dim
+        # # print(grad_q_action_fixed)
 
+        # action_grads = torch.mean(kappa*grad_q_action_fixed+self.alpha*kappa_grads, dim=1)  # N*K_update*action_dim  
+
+        actions_loss = -actions_updated
         self.policy_optimizer.zero_grad()
-        -actions_updated.backward(gradient=action_grads)
+        # actions_loss.backward(gradient=action_grads)
+        actions_loss.backward(gradient=grad_q_action_fixed)
         self.policy_optimizer.step()

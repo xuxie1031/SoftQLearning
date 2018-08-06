@@ -7,13 +7,13 @@ class AdaptiveIsotropicGaussianKernel:
         self.ys = ys
         self.h_min = h_min
 
-        Kx, D1 = xs.size()[-2:]
-        Ky, D2 = ys.size()[-2:]
+        Kx, D1 = self.xs.size()[-2:]
+        Ky, D2 = self.ys.size()[-2:]
         assert D1 == D2
 
-        leading_shape = xs.size()[:-2]
+        leading_shape = self.xs.size()[:-2]
 
-        diff = xs.unsqueeze(-2)-ys.unsqueeze(-3)
+        diff = self.xs.unsqueeze(-2)-self.ys.unsqueeze(-3)
         dist_sq = diff.pow(2).sum(dim=-1, keepdim=False)
 
         shape = leading_shape+torch.Size([Kx*Ky])
@@ -22,8 +22,8 @@ class AdaptiveIsotropicGaussianKernel:
         medians_sq = v[..., -1]
 
         h = medians_sq/np.log(Kx)
-        h = torch.max(h, torch.tensor([self.h_min]))
-        h = h.detach()
+        h = torch.max(h, self.h_min)
+        h = h
         h_expanded_twice = h.unsqueeze(-1).unsqueeze(-1)
 
         kappa = torch.exp(-dist_sq/h_expanded_twice)
